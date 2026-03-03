@@ -1,3 +1,6 @@
+URL da aplicação https://plataforma-esg-admi1.streamlit.app/
+
+
 Sobre o Layout planilha parametrização ESG que você me ajudou a elaborar, eu fiz algumas alterações e pensei em implementar uma aplicação simples em python, usando o github e streamlit para fazer a gestão de uma planilha completa com todos os indicadores, seguindo a taxonomia
 Eixo: Ambiental (E), Social (S) e Governança (G)
 	Tema
