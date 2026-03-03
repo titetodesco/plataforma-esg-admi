@@ -41,7 +41,7 @@ def _load_table_df(conn, table_name: str) -> pd.DataFrame:
     cols = [d[0] for d in cur.description] if cur.description else []
     return pd.DataFrame(rows, columns=cols)
 
-def render_macrobase_editor():
+def render_macrobase_editor(conn):
     st.header("Macro-base (Turso)")
 
     conn = get_conn()
