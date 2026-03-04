@@ -1,211 +1,199 @@
--- schema.sql (SQLite / Turso)
--- Observação: no SQLite, tipos como VARCHAR viram afinidade TEXT, então usamos TEXT/REAL/INTEGER.
-
 PRAGMA foreign_keys = ON;
 
 -- =========================
--- MACRO-BASE
+-- MACRO-BASE (cadastro mestre)
 -- =========================
 
 CREATE TABLE IF NOT EXISTS eixo (
-    eixo_id     TEXT PRIMARY KEY,        -- ex.: "E", "S", "G"
-    codigo      TEXT NOT NULL UNIQUE,     -- ex.: "E"
-    nome        TEXT NOT NULL,            -- ex.: "Ambiental"
-    descricao   TEXT,
-    peso_default REAL CHECK (peso_default >= 0 AND peso_default <= 100)
+  eixo_id       TEXT PRIMARY KEY,
+  codigo        TEXT NOT NULL UNIQUE,
+  nome          TEXT NOT NULL,
+  descricao     TEXT,
+  peso_default  REAL CHECK (peso_default >= 0 AND peso_default <= 100)
 );
 
 CREATE TABLE IF NOT EXISTS tema (
-    tema_id     TEXT PRIMARY KEY,         -- ex.: "E_AGUA"
-    eixo_id     TEXT NOT NULL,
-    codigo      TEXT,                     -- opcional
-    nome        TEXT NOT NULL,
-    descricao   TEXT,
-    peso_default REAL CHECK (peso_default >= 0 AND peso_default <= 100),
-
-    FOREIGN KEY (eixo_id) REFERENCES eixo(eixo_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    UNIQUE (eixo_id, codigo)
+  tema_id       TEXT PRIMARY KEY,
+  eixo_id       TEXT NOT NULL,
+  codigo        TEXT,
+  nome          TEXT NOT NULL,
+  descricao     TEXT,
+  peso_default  REAL CHECK (peso_default >= 0 AND peso_default <= 100),
+  FOREIGN KEY (eixo_id) REFERENCES eixo(eixo_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  UNIQUE (eixo_id, codigo)
 );
 
 CREATE TABLE IF NOT EXISTS topico (
-    topico_id   TEXT PRIMARY KEY,         -- ex.: "E_AGUA_DEFAULT" ou "E_AGUA_MON"
-    tema_id     TEXT NOT NULL,
-    codigo      TEXT,                     -- opcional
-    nome        TEXT NOT NULL,
-    descricao   TEXT,
-    is_default  INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0,1)),
-
-    FOREIGN KEY (tema_id) REFERENCES tema(tema_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    UNIQUE (tema_id, codigo)
+  topico_id     TEXT PRIMARY KEY,
+  tema_id       TEXT NOT NULL,
+  codigo        TEXT,
+  nome          TEXT NOT NULL,
+  descricao     TEXT,
+  FOREIGN KEY (tema_id) REFERENCES tema(tema_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  UNIQUE (tema_id, codigo)
 );
 
--- Garante no máximo 1 tópico default por tema (is_default=1).
--- Índice parcial é suportado no SQLite.
-CREATE UNIQUE INDEX IF NOT EXISTS ux_topico_default_por_tema
-ON topico(tema_id)
-WHERE is_default = 1;
-
+-- Indicador NÃO tem tipo de resposta.
 CREATE TABLE IF NOT EXISTS indicador (
-    indicador_id     TEXT PRIMARY KEY,    -- ex.: "IND_E_AGUA_01"
-    topico_id        TEXT NOT NULL,
-    codigo           TEXT,                -- opcional
-    nome             TEXT NOT NULL,
-    descricao        TEXT,
-    unidade          TEXT,                -- ex.: "%", "N/A"
-    tipo_resposta    TEXT NOT NULL CHECK (tipo_resposta IN ('MULTIPLA','SIM/NAO','NUMERICA','PERCENTUAL')),
-    tipo_indicador   TEXT NOT NULL DEFAULT 'SIMPLES' CHECK (tipo_indicador IN ('SIMPLES','CALCULADO')),
-    formula          TEXT,
-    peso_default     REAL CHECK (peso_default >= 0 AND peso_default <= 100),
-
-    FOREIGN KEY (topico_id) REFERENCES topico(topico_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    UNIQUE (topico_id, codigo)
+  indicador_id      TEXT PRIMARY KEY,
+  topico_id         TEXT NOT NULL,
+  codigo            TEXT,
+  nome              TEXT NOT NULL,
+  descricao         TEXT,
+  tipo_indicador    TEXT NOT NULL CHECK (tipo_indicador IN ('DIRETO','CALCULADO')),
+  psr_tipo          TEXT CHECK (psr_tipo IN ('PRESSAO','ESTADO','RESPOSTA')),
+  formula           TEXT,                -- ex.: (VAR_V2 - VAR_V1) / VAR_V2
+  unidade_resultado TEXT,                -- opcional
+  peso_default      REAL CHECK (peso_default >= 0 AND peso_default <= 100),
+  FOREIGN KEY (topico_id) REFERENCES topico(topico_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  UNIQUE (topico_id, codigo)
 );
 
+-- Variável = Pergunta respondida pela organização
 CREATE TABLE IF NOT EXISTS variavel (
-    variavel_id   TEXT PRIMARY KEY,       -- ex.: "VAR_GEE_INVENT"
-    codigo        TEXT,
-    nome          TEXT NOT NULL,
-    descricao     TEXT,
-    unidade       TEXT,
-    tipo_dado     TEXT NOT NULL DEFAULT 'TEXTO'
-        CHECK (tipo_dado IN ('TEXTO','NUMERO','BOOLEAN','DATA','JSON')),
-    tipo_resposta TEXT NOT NULL DEFAULT 'TEXTO'
-        CHECK (tipo_resposta IN ('MULTIPLA','SIM/NAO','NUMERICA','PERCENTUAL','TEXTO')),
-    opcoes_json   TEXT,                   -- JSON opcional p/ MULTIPLA (ex.: ["A","B","C"])
-    valor_ref_min REAL,
-    valor_ref_max REAL,
-
-    UNIQUE (codigo)
+  variavel_id     TEXT PRIMARY KEY,      -- ex.: V1, V2 (token na fórmula vira VAR_<variavel_id>)
+  codigo          TEXT UNIQUE,
+  pergunta_texto  TEXT NOT NULL,
+  descricao       TEXT,
+  tipo_resposta   TEXT NOT NULL CHECK (tipo_resposta IN ('MULTIPLA_5','SIM_NAO','SIM_IMPLANTACAO_NAO','NUMERICA')),
+  unidade_entrada TEXT,                  -- opcional (pode estar no texto da pergunta)
+  observacoes     TEXT
 );
 
+-- Opções para variáveis categóricas (MULTIPLA_5 / SIM_*)
+CREATE TABLE IF NOT EXISTS variavel_opcao (
+  variavel_id   TEXT NOT NULL,
+  ordem         INTEGER NOT NULL CHECK (ordem >= 1 AND ordem <= 5),
+  texto_opcao   TEXT NOT NULL,
+  score_1a5     INTEGER NOT NULL CHECK (score_1a5 BETWEEN 1 AND 5),
+  PRIMARY KEY (variavel_id, ordem),
+  FOREIGN KEY (variavel_id) REFERENCES variavel(variavel_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+-- Dependências declarativas: quais variáveis alimentam um indicador
 CREATE TABLE IF NOT EXISTS indicador_variavel (
-    indicador_id  TEXT NOT NULL,
-    variavel_id   TEXT NOT NULL,
-    papel         TEXT DEFAULT 'ENTRADA' CHECK (papel IN ('ENTRADA','AUXILIAR','SAIDA')),
-    obrigatoria   INTEGER NOT NULL DEFAULT 0 CHECK (obrigatoria IN (0,1)),
-
-    PRIMARY KEY (indicador_id, variavel_id),
-
-    FOREIGN KEY (indicador_id) REFERENCES indicador(indicador_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    FOREIGN KEY (variavel_id) REFERENCES variavel(variavel_id)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
+  indicador_id   TEXT NOT NULL,
+  variavel_id    TEXT NOT NULL,
+  papel          TEXT NOT NULL DEFAULT 'ENTRADA' CHECK (papel IN ('ENTRADA','AUXILIAR')),
+  obrigatoria    INTEGER NOT NULL DEFAULT 1 CHECK (obrigatoria IN (0,1)),
+  peso           REAL,                   -- opcional
+  PRIMARY KEY (indicador_id, variavel_id),
+  FOREIGN KEY (indicador_id) REFERENCES indicador(indicador_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (variavel_id) REFERENCES variavel(variavel_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
 -- =========================
--- SETUP DO QUESTIONÁRIO
+-- SETUP DO QUESTIONÁRIO (por perfil setor/porte/região)
 -- =========================
 
 CREATE TABLE IF NOT EXISTS questionario (
-    questionario_id TEXT PRIMARY KEY,     -- ex.: "QST_2026_001" ou UUID curto
-    setor           TEXT,
-    porte           TEXT,
-    regiao          TEXT,
-    versao          TEXT,                 -- ex.: "v1.0"
-    status          TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','PUBLISHED','ARCHIVED')),
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    observacao      TEXT
-);
-
--- Peso por eixo (permite variar por questionário)
-CREATE TABLE IF NOT EXISTS peso_eixo (
-    questionario_id TEXT NOT NULL,
-    eixo_id         TEXT NOT NULL,
-    peso_eixo       REAL NOT NULL CHECK (peso_eixo >= 0 AND peso_eixo <= 100),
-    PRIMARY KEY (questionario_id, eixo_id),
-
-    FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    FOREIGN KEY (eixo_id) REFERENCES eixo(eixo_id)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
-);
-
-CREATE TABLE IF NOT EXISTS peso_tema (
-    questionario_id TEXT NOT NULL,
-    tema_id         TEXT NOT NULL,
-    peso_tema       REAL NOT NULL CHECK (peso_tema >= 0 AND peso_tema <= 100),
-    PRIMARY KEY (questionario_id, tema_id),
-
-    FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    FOREIGN KEY (tema_id) REFERENCES tema(tema_id)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
-);
-
-CREATE TABLE IF NOT EXISTS peso_topico (
-    questionario_id TEXT NOT NULL,
-    topico_id       TEXT NOT NULL,
-    peso_topico     REAL NOT NULL CHECK (peso_topico >= 0 AND peso_topico <= 100),
-    PRIMARY KEY (questionario_id, topico_id),
-
-    FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    FOREIGN KEY (topico_id) REFERENCES topico(topico_id)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
+  questionario_id TEXT PRIMARY KEY,
+  setor           TEXT,
+  porte           TEXT,
+  regiao          TEXT,
+  versao          TEXT,
+  status          TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','PUBLISHED','ARCHIVED')),
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  observacao      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS indicador_config (
-    questionario_id  TEXT NOT NULL,
-    indicador_id     TEXT NOT NULL,
-    peso_indicador   REAL NOT NULL CHECK (peso_indicador >= 0 AND peso_indicador <= 100),
-    ativo            INTEGER NOT NULL DEFAULT 1 CHECK (ativo IN (0,1)),
-    PRIMARY KEY (questionario_id, indicador_id),
-
-    FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    FOREIGN KEY (indicador_id) REFERENCES indicador(indicador_id)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT
+  questionario_id TEXT NOT NULL,
+  indicador_id    TEXT NOT NULL,
+  ativo           INTEGER NOT NULL DEFAULT 1 CHECK (ativo IN (0,1)),
+  peso_indicador  REAL NOT NULL CHECK (peso_indicador >= 0 AND peso_indicador <= 100),
+  PRIMARY KEY (questionario_id, indicador_id),
+  FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (indicador_id) REFERENCES indicador(indicador_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
--- Faixas/regras de referência para mapear respostas/valores para nível 1..5
+-- Pesos opcionais por eixo/tema/tópico (se quiser usar na agregação)
+CREATE TABLE IF NOT EXISTS peso_eixo (
+  questionario_id TEXT NOT NULL,
+  eixo_id         TEXT NOT NULL,
+  peso_eixo       REAL NOT NULL CHECK (peso_eixo >= 0 AND peso_eixo <= 100),
+  PRIMARY KEY (questionario_id, eixo_id),
+  FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (eixo_id) REFERENCES eixo(eixo_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS peso_tema (
+  questionario_id TEXT NOT NULL,
+  tema_id         TEXT NOT NULL,
+  peso_tema       REAL NOT NULL CHECK (peso_tema >= 0 AND peso_tema <= 100),
+  PRIMARY KEY (questionario_id, tema_id),
+  FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (tema_id) REFERENCES tema(tema_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS peso_topico (
+  questionario_id TEXT NOT NULL,
+  topico_id       TEXT NOT NULL,
+  peso_topico     REAL NOT NULL CHECK (peso_topico >= 0 AND peso_topico <= 100),
+  PRIMARY KEY (questionario_id, topico_id),
+  FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (topico_id) REFERENCES topico(topico_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+-- Faixas de referência por indicador (para NUMERICA e/ou CALCULADO)
 CREATE TABLE IF NOT EXISTS faixa_referencia (
-    questionario_id TEXT NOT NULL,
-    indicador_id    TEXT NOT NULL,
-    nivel           INTEGER NOT NULL CHECK (nivel BETWEEN 1 AND 5),
-    tipo_regra      TEXT NOT NULL CHECK (tipo_regra IN ('INTERVALO','EXATO','DIRETO')),
-    valor_min       REAL,
-    valor_max       REAL,
-    valor_exato     REAL,
-    rotulo          TEXT,
-    pontos          REAL,                 -- opcional: 0..100 ou outra escala
+  questionario_id TEXT NOT NULL,
+  indicador_id    TEXT NOT NULL,
+  nivel           INTEGER NOT NULL CHECK (nivel BETWEEN 1 AND 5),
+  tipo_regra      TEXT NOT NULL CHECK (tipo_regra IN ('INTERVALO','EXATO','DIRETO')),
+  valor_min       REAL,
+  valor_max       REAL,
+  valor_exato     REAL,
+  rotulo          TEXT,
+  PRIMARY KEY (questionario_id, indicador_id, nivel),
+  FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (indicador_id) REFERENCES indicador(indicador_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+);
 
-    PRIMARY KEY (questionario_id, indicador_id, nivel),
+-- Recomendações por nível (1..5) para TEMA e EIXO, por perfil
+CREATE TABLE IF NOT EXISTS recomendacao_tema (
+  questionario_id TEXT NOT NULL,
+  tema_id         TEXT NOT NULL,
+  nivel           INTEGER NOT NULL CHECK (nivel BETWEEN 1 AND 5),
+  recomendacao    TEXT NOT NULL,
+  PRIMARY KEY (questionario_id, tema_id, nivel),
+  FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (tema_id) REFERENCES tema(tema_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+);
 
-    FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE,
-
-    FOREIGN KEY (indicador_id) REFERENCES indicador(indicador_id)
-        ON UPDATE CASCADE
-        ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS recomendacao_eixo (
+  questionario_id TEXT NOT NULL,
+  eixo_id         TEXT NOT NULL,
+  nivel           INTEGER NOT NULL CHECK (nivel BETWEEN 1 AND 5),
+  recomendacao    TEXT NOT NULL,
+  PRIMARY KEY (questionario_id, eixo_id, nivel),
+  FOREIGN KEY (questionario_id) REFERENCES questionario(questionario_id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  FOREIGN KEY (eixo_id) REFERENCES eixo(eixo_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
 );
 
 -- Índices úteis
-CREATE INDEX IF NOT EXISTS ix_tema_eixo       ON tema(eixo_id);
-CREATE INDEX IF NOT EXISTS ix_topico_tema     ON topico(tema_id);
-CREATE INDEX IF NOT EXISTS ix_indicador_topico ON indicador(topico_id);
-CREATE INDEX IF NOT EXISTS ix_indcfg_qst      ON indicador_config(questionario_id);
+CREATE INDEX IF NOT EXISTS ix_tema_eixo    ON tema(eixo_id);
+CREATE INDEX IF NOT EXISTS ix_topico_tema  ON topico(tema_id);
+CREATE INDEX IF NOT EXISTS ix_ind_topico   ON indicador(topico_id);
+CREATE INDEX IF NOT EXISTS ix_indcfg_qst   ON indicador_config(questionario_id);
+CREATE INDEX IF NOT EXISTS ix_faixa_qst    ON faixa_referencia(questionario_id);
