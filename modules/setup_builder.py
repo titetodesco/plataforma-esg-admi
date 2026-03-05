@@ -55,17 +55,24 @@ def render_setup_builder(conn):
                     st.error("Informe QUESTIONARIO_ID.")
                     st.stop()
 
+                # antes de inserir, checa se já existe
+                exists = df_from_query(conn,
+                    "SELECT 1 FROM questionario WHERE questionario_id=? LIMIT 1",
+                    (qid.strip(),)
+                )
+                
+                if not exists.empty:
+                    st.warning("Esse QUESTIONARIO_ID já existe. Selecione-o no dropdown.")
+                    st.stop()
+                
                 conn.execute("""
                     INSERT INTO questionario (questionario_id, setor, porte, regiao, versao, status, observacao)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (qid.strip(), setor.strip(), porte.strip(), regiao.strip(), versao.strip(), status, obs.strip()))
                 conn.commit()
-                conn.sync()
+                # conn.sync()  # pode manter ou remover se estiver lento
                 st.success("Questionário criado.")
                 st.rerun()
-
-        st.info("Crie um questionário para habilitar as etapas B–F.")
-        return
 
     qid = selected
     qmeta = df_from_query(conn, """
