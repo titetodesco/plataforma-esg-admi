@@ -27,6 +27,7 @@ def write_df(ws, df):
     autosize(ws)
 
 def export_setup_xlsx(conn, questionario_id: str) -> bytes:
+    conn.sync()
     wb = Workbook()
     wb.remove(wb.active)
 
