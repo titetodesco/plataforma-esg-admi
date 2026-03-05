@@ -170,6 +170,25 @@ CREATE TABLE IF NOT EXISTS recomendacao_eixo (
     ON UPDATE CASCADE ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS recomendacao_tema_default (
+  tema_id      TEXT NOT NULL,
+  nivel        INTEGER NOT NULL CHECK (nivel BETWEEN 1 AND 5),
+  recomendacao TEXT NOT NULL,
+  PRIMARY KEY (tema_id, nivel),
+  FOREIGN KEY (tema_id) REFERENCES tema(tema_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS recomendacao_eixo_default (
+  eixo_id      TEXT NOT NULL,
+  nivel        INTEGER NOT NULL CHECK (nivel BETWEEN 1 AND 5),
+  recomendacao TEXT NOT NULL,
+  PRIMARY KEY (eixo_id, nivel),
+  FOREIGN KEY (eixo_id) REFERENCES eixo(eixo_id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+
 CREATE INDEX IF NOT EXISTS ix_tema_eixo    ON tema(eixo_id);
 CREATE INDEX IF NOT EXISTS ix_topico_tema  ON topico(tema_id);
 CREATE INDEX IF NOT EXISTS ix_ind_topico   ON indicador(topico_id);
