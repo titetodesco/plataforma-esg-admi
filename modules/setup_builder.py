@@ -70,7 +70,6 @@ def render_setup_builder(conn):
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (qid.strip(), setor.strip(), porte.strip(), regiao.strip(), versao.strip(), status, obs.strip()))
                 conn.commit()
-                # conn.sync()  # pode manter ou remover se estiver lento
                 st.success("Questionário criado.")
                 st.rerun()
 
@@ -192,7 +191,6 @@ def render_setup_builder(conn):
                     DO UPDATE SET ativo=excluded.ativo, peso_indicador=excluded.peso_indicador
                 """, (qid, indicador_id, ativo, peso))
             conn.commit()
-            conn.sync()
             st.success("Indicadores salvos.")
             st.rerun()
 
@@ -268,7 +266,6 @@ def render_setup_builder(conn):
                     DO UPDATE SET peso_tema=excluded.peso_tema
                 """, (qid, r["tema_id"], normalize_weight(r["peso (1..10)"])))
             conn.commit()
-            conn.sync()
             st.success("Pesos de tema salvos.")
             st.rerun()
 
@@ -293,7 +290,6 @@ def render_setup_builder(conn):
                     DO UPDATE SET peso_topico=excluded.peso_topico
                 """, (qid, r["topico_id"], normalize_weight(r["peso (1..10)"])))
             conn.commit()
-            conn.sync()
             st.success("Pesos de tópico salvos.")
             st.rerun()
 
@@ -357,7 +353,6 @@ def render_setup_builder(conn):
                     r["valor_min"], r["valor_max"], r["valor_exato"], str(r.get("rotulo","") or "")
                 ))
             conn.commit()
-            conn.sync()
             st.success("Faixas salvas.")
             st.rerun()
 
@@ -390,7 +385,6 @@ def render_setup_builder(conn):
                     VALUES (?, ?, ?, ?)
                 """, (qid, tema_sel, int(r["nivel"]), str(r["recomendacao"]).strip()))
         conn.commit()
-        conn.sync()
         st.success("Recomendações do tema salvas.")
         st.rerun()
 
@@ -429,7 +423,6 @@ def render_setup_builder(conn):
                     VALUES (?, ?, ?, ?)
                 """, (qid, eixo_sel, int(r["nivel"]), str(r["recomendacao"]).strip()))
         conn.commit()
-        conn.sync()
         st.success("Recomendações do eixo salvas.")
         st.rerun()
 
