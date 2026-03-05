@@ -3,150 +3,149 @@ import pandas as pd
 from utils.excel_io import load_macrobase
 
 def render_macrobase_editor(conn):
-    st.header("Macro-base (Turso)")
+    st.header("Macro-base (Turso) — v2.1")
 
-    st.subheader("1) Upload da Macro-base (Excel)")
-    uploaded_file = st.file_uploader("Carregar arquivo MACRO_BASE.xlsx", type=["xlsx"])
+    uploaded_file = st.file_uploader("Carregar arquivo MACRO_BASE_v2_1.xlsx", type=["xlsx"])
 
     if uploaded_file:
         data = load_macrobase(uploaded_file)
 
-        if st.button("Publicar macro-base no Turso (schema relacional)"):
-            with st.spinner("Gravando no Turso..."):
-                publish_macrobase_relacional(conn, data)
-            st.success("Macro-base publicada no Turso!")
-
-        st.divider()
-        st.subheader("Pré-visualização do Excel carregado")
-        for k in ["EIXOS","TEMAS","TOPICOS","INDICADORES","VARIAVEIS","INDICADOR_VARIAVEL"]:
+        st.subheader("Pré-visualização do Excel")
+        for k in data.keys():
             st.write(f"**{k}**")
-            st.dataframe(data[k], use_container_width=True)
+            st.dataframe(data[k], width="stretch")
+
+        if st.button("Publicar macro-base no Turso (schema v2.1)"):
+            with st.spinner("Gravando no Turso..."):
+                publish_macrobase_relacional_v21(conn, data)
+            st.success("Macro-base publicada no Turso! ✅")
 
     st.divider()
-    st.subheader("2) Visualizar macro-base no Turso (tabelas reais)")
-
-    tabs = st.tabs(["eixo","tema","topico","indicador","variavel","indicador_variavel"])
-    for tab, table in zip(tabs, ["eixo","tema","topico","indicador","variavel","indicador_variavel"]):
-        with tab:
+    st.subheader("Visualização das tabelas no Turso")
+    for table in ["eixo","tema","topico","indicador","variavel","variavel_opcao","indicador_variavel"]:
+        with st.expander(table, expanded=False):
             try:
                 df = load_table_df(conn, table)
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, width="stretch")
             except Exception as e:
-                st.info(f"Não consegui ler a tabela '{table}'. Detalhe: {e}")
+                st.info(f"Não consegui ler {table}: {e}")
 
-def publish_macrobase_relacional(conn, data: dict):
+def publish_macrobase_relacional_v21(conn, data: dict):
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.sync()
 
-    # 1) apagar na ordem correta (filhos -> pais)
+    # helpers
+    def sid(x): return str(x).strip() if x is not None else ""
+    def stext(x): return "" if pd.isna(x) else str(x).strip()
+
+    # PESO_DEFAULT: inteiro 1..10; vazio vira 1
+    def sint_1a10(x):
+        if x is None or x == "" or (isinstance(x, float) and pd.isna(x)):
+            return 1
+        try:
+            v = int(float(str(x).replace(",", ".")))
+        except Exception:
+            return 1
+        return max(1, min(10, v))
+
+    # limpa na ordem correta
     conn.execute("DELETE FROM indicador_variavel;")
+    conn.execute("DELETE FROM variavel_opcao;")
+    conn.execute("DELETE FROM variavel;")
     conn.execute("DELETE FROM indicador;")
     conn.execute("DELETE FROM topico;")
     conn.execute("DELETE FROM tema;")
     conn.execute("DELETE FROM eixo;")
-    conn.execute("DELETE FROM variavel;")
     conn.commit()
 
-    # 2) inserir EIXOS
+    # EIXOS
     df = data["EIXOS"].fillna("")
     for _, r in df.iterrows():
         conn.execute(
-            "INSERT INTO eixo (eixo_id, codigo, nome, descricao, peso_default) VALUES (?,?,?,?,?)",
-            (
-                str(r["EIXO_ID"]).strip(),
-                str(r["EIXO_ID"]).strip(),
-                str(r["NOME"]).strip(),
-                str(r.get("DESCRICAO","")).strip(),
-                float(r.get("PESO_DEFAULT") or 0),
-            ),
+            "INSERT INTO eixo (eixo_id,codigo,nome,descricao,peso_default) VALUES (?,?,?,?,?)",
+            (sid(r["EIXO_ID"]), sid(r.get("CODIGO") or r["EIXO_ID"]), stext(r["NOME"]), stext(r.get("DESCRICAO","")), sint_1a10(r.get("PESO_DEFAULT")))
         )
 
-    # 3) inserir TEMAS
+    # TEMAS
     df = data["TEMAS"].fillna("")
     for _, r in df.iterrows():
         conn.execute(
-            "INSERT INTO tema (tema_id, eixo_id, codigo, nome, descricao, peso_default) VALUES (?,?,?,?,?,?)",
-            (
-                str(r["TEMA_ID"]).strip(),
-                str(r["EIXO_ID"]).strip(),
-                str(r.get("CODIGO") or r["TEMA_ID"]).strip(),
-                str(r["NOME"]).strip(),
-                str(r.get("DESCRICAO","")).strip(),
-                float(r.get("PESO_DEFAULT") or 0),
-            ),
+            "INSERT INTO tema (tema_id,eixo_id,codigo,nome,descricao,peso_default) VALUES (?,?,?,?,?,?)",
+            (sid(r["TEMA_ID"]), sid(r["EIXO_ID"]), sid(r.get("CODIGO") or r["TEMA_ID"]), stext(r["NOME"]), stext(r.get("DESCRICAO","")), sint_1a10(r.get("PESO_DEFAULT")))
         )
 
-    # 4) inserir TOPICOS
+    # TOPICOS
     df = data["TOPICOS"].fillna("")
     for _, r in df.iterrows():
+        # Se sua planilha não tiver PESO_DEFAULT em TOPICOS, cai para 1
         conn.execute(
-            "INSERT INTO topico (topico_id, tema_id, codigo, nome, descricao, is_default) VALUES (?,?,?,?,?,?)",
-            (
-                str(r["TOPICO_ID"]).strip(),
-                str(r["TEMA_ID"]).strip(),
-                str(r.get("CODIGO") or r["TOPICO_ID"]).strip(),
-                str(r["NOME"]).strip(),
-                str(r.get("DESCRICAO","")).strip(),
-                0,
-            ),
+            "INSERT INTO topico (topico_id,tema_id,codigo,nome,descricao,peso_default) VALUES (?,?,?,?,?,?)",
+            (sid(r["TOPICO_ID"]), sid(r["TEMA_ID"]), sid(r.get("CODIGO") or r["TOPICO_ID"]), stext(r["NOME"]), stext(r.get("DESCRICAO","")), sint_1a10(r.get("PESO_DEFAULT")))
         )
 
-    # 5) inserir INDICADORES  (IMPORTANTE: precisa de TOPICO_ID no excel)
+    # INDICADORES (sem tipo_resposta)
     df = data["INDICADORES"].fillna("")
     for _, r in df.iterrows():
         conn.execute(
-            """
-            INSERT INTO indicador
-            (indicador_id, topico_id, codigo, nome, descricao, unidade, tipo_resposta, tipo_indicador, formula, peso_default)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            """,
+            """INSERT INTO indicador
+               (indicador_id,topico_id,codigo,nome,descricao,tipo_indicador,psr_tipo,formula,unidade_resultado,peso_default)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
-                str(r["INDICADOR_ID"]).strip(),
-                str(r["TOPICO_ID"]).strip(),     # <- aqui é o ponto-chave
-                str(r.get("CODIGO") or r["INDICADOR_ID"]).strip(),
-                str(r["NOME"]).strip(),
-                str(r.get("DESCRICAO","")).strip(),
-                str(r.get("UNIDADE","")).strip(),
-                str(r.get("TIPO_RESPOSTA","MULTIPLA")).strip(),
-                "SIMPLES",
-                str(r.get("FORMULA","")).strip(),
-                float(r.get("PESO_DEFAULT") or 0),
-            ),
+                sid(r["INDICADOR_ID"]),
+                sid(r["TOPICO_ID"]),
+                sid(r.get("CODIGO") or r["INDICADOR_ID"]),
+                stext(r["NOME"]),
+                stext(r.get("DESCRICAO","")),
+                sid(r.get("TIPO_INDICADOR","DIRETO")),
+                sid(r.get("PSR_TIPO","")) or None,
+                stext(r.get("FORMULA","")),
+                stext(r.get("UNIDADE_RESULTADO","")),
+                sint_1a10(r.get("PESO_DEFAULT")),
+            )
         )
 
-    # 6) inserir VARIAVEIS
+    # VARIAVEIS (perguntas)
     df = data["VARIAVEIS"].fillna("")
     for _, r in df.iterrows():
         conn.execute(
-            """
-            INSERT INTO variavel
-            (variavel_id, codigo, nome, descricao, unidade, tipo_dado, tipo_resposta, opcoes_json, valor_ref_min, valor_ref_max)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            """,
+            """INSERT INTO variavel
+               (variavel_id,codigo,pergunta_texto,descricao,tipo_resposta,unidade_entrada,observacoes)
+               VALUES (?,?,?,?,?,?,?)""",
             (
-                str(r["VARIAVEL_ID"]).strip(),
-                str(r.get("CODIGO") or r["VARIAVEL_ID"]).strip(),
-                str(r["NOME"]).strip(),
-                str(r.get("DESCRICAO","")).strip(),
-                str(r.get("UNIDADE","")).strip(),
-                str(r.get("TIPO_DADO","TEXTO")).strip(),
-                str(r.get("TIPO_RESPOSTA","TEXTO")).strip(),
-                str(r.get("OPCOES_JSON") or r.get("OPCOES") or "").strip(),
-                r.get("VALOR_REF_MIN") if r.get("VALOR_REF_MIN") != "" else None,
-                r.get("VALOR_REF_MAX") if r.get("VALOR_REF_MAX") != "" else None,
-            ),
+                sid(r["VARIAVEL_ID"]),
+                sid(r.get("CODIGO") or r["VARIAVEL_ID"]),
+                stext(r["PERGUNTA_TEXTO"]),
+                stext(r.get("DESCRICAO","")),
+                sid(r["TIPO_RESPOSTA"]),
+                stext(r.get("UNIDADE_ENTRADA","")),
+                stext(r.get("OBSERVACOES","")),
+            )
         )
 
-    # 7) inserir INDICADOR_VARIAVEL
-    df = data["INDICADOR_VARIAVEL"].fillna("")
+    # VARIAVEL_OPCOES
+    df = data["VARIAVEL_OPCOES"].fillna("")
     for _, r in df.iterrows():
         conn.execute(
-            "INSERT INTO indicador_variavel (indicador_id, variavel_id, papel, obrigatoria) VALUES (?,?,?,?)",
+            "INSERT INTO variavel_opcao (variavel_id,ordem,texto_opcao,score_1a5) VALUES (?,?,?,?)",
+            (sid(r["VARIAVEL_ID"]), int(r["ORDEM"]), stext(r["TEXTO_OPCAO"]), int(r["SCORE_1A5"]))
+        )
+
+    # INDICADOR_VARIAVEL
+    df = data["INDICADOR_VARIAVEL"].fillna("")
+    for _, r in df.iterrows():
+        peso = r.get("PESO")
+        peso = None if (peso is None or peso == "" or pd.isna(peso)) else sint_1a10(peso)
+        conn.execute(
+            """INSERT INTO indicador_variavel
+               (indicador_id,variavel_id,papel,obrigatoria,peso)
+               VALUES (?,?,?,?,?)""",
             (
-                str(r["INDICADOR_ID"]).strip(),
-                str(r["VARIAVEL_ID"]).strip(),
-                str(r.get("PAPEL","ENTRADA")).strip().upper(),
-                int(r.get("OBRIGATORIA") or 0),
-            ),
+                sid(r["INDICADOR_ID"]),
+                sid(r["VARIAVEL_ID"]),
+                sid(r.get("PAPEL","ENTRADA")),
+                int(r.get("OBRIGATORIA") or 1),
+                peso,
+            )
         )
 
     conn.commit()
