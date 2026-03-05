@@ -7,5 +7,6 @@ def load_macrobase(file):
         "TOPICOS": pd.read_excel(file, sheet_name="TOPICOS"),
         "INDICADORES": pd.read_excel(file, sheet_name="INDICADORES"),
         "VARIAVEIS": pd.read_excel(file, sheet_name="VARIAVEIS"),
+        "VARIAVEL_OPCOES": pd.read_excel(file, sheet_name="VARIAVEL_OPCOES"),
         "INDICADOR_VARIAVEL": pd.read_excel(file, sheet_name="INDICADOR_VARIAVEL"),
     }
