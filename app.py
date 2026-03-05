@@ -1,11 +1,18 @@
 import streamlit as st
 from modules.db import get_conn, init_schema
 from modules.macrobase_editor import render_macrobase_editor
+from modules.setup_builder import render_setup_builder
 
 st.set_page_config(layout="wide")
-st.title("SORG ESG - Macro-base Builder (Turso)")
+st.title("SORG ESG - Builder (Turso)")
 
 conn = get_conn()
-init_schema(conn)  # cria tabelas se não existirem (schema.sql no repo)
+init_schema(conn)
 
-render_macrobase_editor(conn)
+menu = st.sidebar.selectbox("Menu", ["Macro-base", "Setup do Questionário"])
+
+if menu == "Macro-base":
+    render_macrobase_editor(conn)
+
+if menu == "Setup do Questionário":
+    render_setup_builder(conn)
