@@ -6,6 +6,6 @@ st.set_page_config(layout="wide")
 st.title("SORG ESG - Macro-base Builder (Turso)")
 
 conn = get_conn()
-init_schema(conn)  # aplica schema.sql se ainda não existir (CREATE IF NOT EXISTS)
+init_schema(conn)  # cria tabelas se não existirem (schema.sql no repo)
 
 render_macrobase_editor(conn)
