@@ -27,56 +27,44 @@ def write_df(ws, df):
     autosize(ws)
 
 def export_setup_xlsx(conn, questionario_id: str) -> bytes:
-    conn.sync()
+    conn.sync()  # 1 sync apenas aqui (você já aplicou isso ✅)
+
     wb = Workbook()
     wb.remove(wb.active)
 
-    # CONFIG_DIMENSAO
-    ws = wb.create_sheet("CONFIG_DIMENSAO")
-    ws["A1"] = "Nome do campo de dimensão"
-    ws["A2"] = "EIXO"
-    ws["A4"] = "Arquivo gerado pelo Builder (macro-base no Turso)."
-    ws.column_dimensions["A"].width = 90
-
-    # LISTAS (opcional, útil para a outra aplicação)
-    setores = df_from_query(conn, "SELECT DISTINCT setor FROM questionario WHERE setor IS NOT NULL AND setor <> ''")
-    portes = df_from_query(conn, "SELECT DISTINCT porte FROM questionario WHERE porte IS NOT NULL AND porte <> ''")
-    regioes = df_from_query(conn, "SELECT DISTINCT regiao FROM questionario WHERE regiao IS NOT NULL AND regiao <> ''")
-
-    wsL = wb.create_sheet("LISTAS")
-    wsL["A1"] = "SETORES"
-    for i, v in enumerate(setores["setor"].tolist(), start=2):
-        wsL[f"A{i}"] = v
-    wsL["C1"] = "PORTES"
-    for i, v in enumerate(portes["porte"].tolist(), start=2):
-        wsL[f"C{i}"] = v
-    wsL["E1"] = "REGIOES"
-    for i, v in enumerate(regioes["regiao"].tolist(), start=2):
-        wsL[f"E{i}"] = v
-    autosize(wsL)
-
-    # QUESTIONARIO (apenas o selecionado)
+    # Puxa o questionário (para montar CONFIG_ORGANIZACOES)
     q = df_from_query(conn, """
-        SELECT questionario_id, setor, porte, regiao, versao, status, observacao
-        FROM questionario WHERE questionario_id=?
+        SELECT setor, porte, regiao, status, observacao
+        FROM questionario
+        WHERE questionario_id=?
     """, (questionario_id,))
-    write_df(wb.create_sheet("QUESTIONARIO"), q)
+    if q.empty:
+        raise ValueError(f"Questionario_id '{questionario_id}' não encontrado.")
 
-    # CONFIG_ORGANIZACOES (mantém como você pediu)
-    # ATIVO = 1 quando status != ARCHIVED
-    cfg = q.copy()
-    cfg = cfg.rename(columns={"setor":"SETOR","porte":"PORTE","regiao":"REGIAO","observacao":"OBSERVACAO"})
+    # CONFIG_ORGANIZACOES
+    cfg = q.rename(columns={"setor":"SETOR","porte":"PORTE","regiao":"REGIAO","observacao":"OBSERVACAO"}).copy()
     cfg["ATIVO"] = cfg["status"].apply(lambda s: 0 if str(s).upper() == "ARCHIVED" else 1)
     cfg = cfg[["SETOR","PORTE","REGIAO","ATIVO","OBSERVACAO"]]
     write_df(wb.create_sheet("CONFIG_ORGANIZACOES"), cfg)
 
-    # PESOS_TEMA / PESOS_TOPICO
-    pt = df_from_query(conn, "SELECT questionario_id, tema_id, peso_tema FROM peso_tema WHERE questionario_id=?", (questionario_id,))
+    # PESOS_TEMA
+    pt = df_from_query(conn, """
+        SELECT questionario_id, tema_id, peso_tema
+        FROM peso_tema
+        WHERE questionario_id=?
+        ORDER BY tema_id
+    """, (questionario_id,))
     if pt.empty:
         pt = pd.DataFrame(columns=["questionario_id","tema_id","peso_tema"])
     write_df(wb.create_sheet("PESOS_TEMA"), pt)
 
-    ptop = df_from_query(conn, "SELECT questionario_id, topico_id, peso_topico FROM peso_topico WHERE questionario_id=?", (questionario_id,))
+    # PESOS_TOPICO
+    ptop = df_from_query(conn, """
+        SELECT questionario_id, topico_id, peso_topico
+        FROM peso_topico
+        WHERE questionario_id=?
+        ORDER BY topico_id
+    """, (questionario_id,))
     if ptop.empty:
         ptop = pd.DataFrame(columns=["questionario_id","topico_id","peso_topico"])
     write_df(wb.create_sheet("PESOS_TOPICO"), ptop)
@@ -103,7 +91,7 @@ def export_setup_xlsx(conn, questionario_id: str) -> bytes:
         fr = pd.DataFrame(columns=["questionario_id","indicador_id","nivel","tipo_regra","valor_min","valor_max","valor_exato","rotulo"])
     write_df(wb.create_sheet("FAIXA_REFERENCIA"), fr)
 
-    # RECOM_TEMA / RECOM_EIXO
+    # RECOM_TEMA
     rt = df_from_query(conn, """
         SELECT questionario_id, tema_id, nivel, recomendacao
         FROM recomendacao_tema
@@ -114,6 +102,7 @@ def export_setup_xlsx(conn, questionario_id: str) -> bytes:
         rt = pd.DataFrame(columns=["questionario_id","tema_id","nivel","recomendacao"])
     write_df(wb.create_sheet("RECOM_TEMA"), rt)
 
+    # RECOM_EIXO
     re = df_from_query(conn, """
         SELECT questionario_id, eixo_id, nivel, recomendacao
         FROM recomendacao_eixo
@@ -123,13 +112,6 @@ def export_setup_xlsx(conn, questionario_id: str) -> bytes:
     if re.empty:
         re = pd.DataFrame(columns=["questionario_id","eixo_id","nivel","recomendacao"])
     write_df(wb.create_sheet("RECOM_EIXO"), re)
-
-    ws = wb.create_sheet("README")
-    ws["A1"] = "SETUP gerado pelo Builder"
-    ws["A3"] = "CONFIG_ORGANIZACOES usa curinga '*' quando aplicável."
-    ws["A4"] = "Pesos: inteiros 1..10 (tema/tópico/indicador)."
-    ws["A5"] = "Faixas: nível 1..5 por indicador."
-    ws.column_dimensions["A"].width = 90
 
     bio = io.BytesIO()
     wb.save(bio)
