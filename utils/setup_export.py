@@ -26,6 +26,114 @@ def write_df(ws, df):
     ws.freeze_panes = "A2"
     autosize(ws)
 
+
+def build_validacap_setup(questionario_id: str, cfg: pd.DataFrame, pt: pd.DataFrame, ptop: pd.DataFrame,
+                          ind: pd.DataFrame, fr: pd.DataFrame, rt: pd.DataFrame, re: pd.DataFrame,
+                          calc_active: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+
+    def add(regra: str, ok: bool, detalhe: str, qtd=None):
+        rows.append({
+            "regra": regra,
+            "status": "OK" if ok else "ERRO",
+            "detalhe": detalhe,
+            "qtd": "" if qtd is None else qtd,
+        })
+
+    add("Questionário informado", bool(str(questionario_id).strip()), f"questionario_id={questionario_id}")
+
+    add(
+        "CONFIG_ORGANIZACOES possui 1 registro",
+        len(cfg) == 1,
+        f"Encontrado(s): {len(cfg)}",
+        len(cfg),
+    )
+
+    add(
+        "PESOS_TEMA não vazio",
+        len(pt) > 0,
+        f"Encontrado(s): {len(pt)}",
+        len(pt),
+    )
+
+    add(
+        "PESOS_TOPICO não vazio",
+        len(ptop) > 0,
+        f"Encontrado(s): {len(ptop)}",
+        len(ptop),
+    )
+
+    add(
+        "INDICADORES_SETUP não vazio",
+        len(ind) > 0,
+        f"Encontrado(s): {len(ind)}",
+        len(ind),
+    )
+
+    if not ind.empty and "indicador_id" in ind.columns:
+        dup_ind = int(ind.duplicated(subset=["indicador_id"], keep=False).sum())
+        add(
+            "INDICADORES_SETUP sem indicador_id duplicado",
+            dup_ind == 0,
+            "Sem duplicados" if dup_ind == 0 else "Há indicador_id duplicado",
+            dup_ind,
+        )
+    else:
+        add("INDICADORES_SETUP contém coluna indicador_id", False, "Coluna ausente ou tabela vazia")
+
+    if not fr.empty and {"indicador_id", "nivel"}.issubset(set(fr.columns)):
+        dup_fr = int(fr.duplicated(subset=["indicador_id", "nivel"], keep=False).sum())
+        add(
+            "FAIXA_REFERENCIA sem duplicidade (indicador_id,nivel)",
+            dup_fr == 0,
+            "Sem duplicados" if dup_fr == 0 else "Há duplicidade por indicador/nível",
+            dup_fr,
+        )
+    else:
+        add("FAIXA_REFERENCIA contém colunas mínimas", False, "Necessário: indicador_id e nivel")
+
+    calc_ids = []
+    if not calc_active.empty and "indicador_id" in calc_active.columns:
+        calc_ids = sorted(calc_active["indicador_id"].astype(str).tolist())
+
+    if calc_ids and not fr.empty and {"indicador_id", "nivel"}.issubset(set(fr.columns)):
+        incompletos = []
+        fr2 = fr.copy()
+        fr2["nivel"] = pd.to_numeric(fr2["nivel"], errors="coerce")
+        for ind_id in calc_ids:
+            niveis = set(fr2.loc[fr2["indicador_id"].astype(str) == str(ind_id), "nivel"].dropna().astype(int).tolist())
+            if niveis != {1, 2, 3, 4, 5}:
+                incompletos.append(ind_id)
+        add(
+            "Indicadores calculados ativos com 5 faixas",
+            len(incompletos) == 0,
+            "Todos completos" if len(incompletos) == 0 else f"Incompletos: {', '.join(incompletos[:10])}",
+            len(incompletos),
+        )
+    else:
+        add(
+            "Indicadores calculados ativos com 5 faixas",
+            len(calc_ids) == 0,
+            "Sem calculados ativos" if len(calc_ids) == 0 else "Não foi possível validar faixas",
+            len(calc_ids),
+        )
+
+    add(
+        "RECOM_TEMA não vazio",
+        len(rt) > 0,
+        f"Encontrado(s): {len(rt)}",
+        len(rt),
+    )
+
+    add(
+        "RECOM_EIXO não vazio",
+        len(re) > 0,
+        f"Encontrado(s): {len(re)}",
+        len(re),
+    )
+
+    return pd.DataFrame(rows, columns=["regra", "status", "detalhe", "qtd"])
+
 def export_setup_xlsx(conn, questionario_id: str) -> bytes:
     conn.sync()  # 1 sync apenas aqui (você já aplicou isso ✅)
 
@@ -149,6 +257,10 @@ def export_setup_xlsx(conn, questionario_id: str) -> bytes:
         re = pd.DataFrame(columns=["questionario_id","eixo_id","nivel","recomendacao"])
 
     write_df(wb.create_sheet("RECOM_EIXO"), re)
+
+    # VALIDACAP_SETUP (regras de consistência do setup exportado)
+    valid = build_validacap_setup(questionario_id, cfg, pt, ptop, ind, fr, rt, re, calc_active)
+    write_df(wb.create_sheet("VALIDACAP_SETUP"), valid)
 
     bio = io.BytesIO()
     wb.save(bio)

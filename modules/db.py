@@ -17,9 +17,25 @@ class ResultSetCursorAdapter:
     def __init__(self, result_set):
         self._result_set = result_set
         self.description = [(c,) for c in tuple(getattr(result_set, "columns", ()))]
+        self._rows = list(getattr(self._result_set, "rows", []))
+        self._idx = 0
 
     def fetchall(self):
-        return list(getattr(self._result_set, "rows", []))
+        if self._idx == 0:
+            self._idx = len(self._rows)
+            return list(self._rows)
+        if self._idx >= len(self._rows):
+            return []
+        remaining = self._rows[self._idx :]
+        self._idx = len(self._rows)
+        return list(remaining)
+
+    def fetchone(self):
+        if self._idx >= len(self._rows):
+            return None
+        row = self._rows[self._idx]
+        self._idx += 1
+        return row
 
 
 class LibsqlClientConnAdapter:
