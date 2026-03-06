@@ -3,6 +3,7 @@ import pandas as pd
 from utils.setup_export import export_setup_xlsx
 
 
+# -------------------- Helpers --------------------
 def df_from_query(conn, sql: str, params=()):
     cur = conn.execute(sql, params)
     rows = cur.fetchall()
@@ -18,23 +19,121 @@ def w_1a10(x):
     return max(1, min(10, v))
 
 
+def _cache_get(key: str):
+    return st.session_state.get(key)
+
+
+def _cache_set(key: str, value):
+    st.session_state[key] = value
+
+
+def _cache_ver():
+    return int(st.session_state.get("_cache_ver", 0))
+
+
+def _cache_bump():
+    st.session_state["_cache_ver"] = _cache_ver() + 1
+
+
+def load_macro_cache(conn):
+    """
+    Carrega EIXO/TEMA/TOPICO/INDICADOR uma vez por sessão (e recarrega quando _cache_ver muda).
+    Isso reduz MUITO a lentidão no Streamlit Cloud.
+    """
+    ver = _cache_ver()
+    cached = _cache_get(f"_macro_cache_{ver}")
+    if cached is not None:
+        return cached
+
+    eixos = df_from_query(conn, "SELECT eixo_id, codigo, nome FROM eixo ORDER BY eixo_id")
+    temas = df_from_query(conn, "SELECT tema_id, eixo_id, nome FROM tema ORDER BY eixo_id, tema_id")
+    topicos = df_from_query(conn, "SELECT topico_id, tema_id, nome FROM topico ORDER BY tema_id, topico_id")
+    indicadores = df_from_query(
+        conn,
+        """
+        SELECT i.indicador_id, i.topico_id, i.nome, i.tipo_indicador, i.psr_tipo
+        FROM indicador i
+        ORDER BY i.indicador_id
+        """,
+    )
+
+    cached = {
+        "eixos": eixos,
+        "temas": temas,
+        "topicos": topicos,
+        "indicadores": indicadores,
+    }
+    _cache_set(f"_macro_cache_{ver}", cached)
+    return cached
+
+
+def load_questionario_cache(conn, questionario_id: str):
+    """
+    Cache de configurações do questionário para evitar bater no Turso a cada clique.
+    Recarrega quando _cache_ver muda.
+    """
+    ver = _cache_ver()
+    key = f"_qcache_{questionario_id}_{ver}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    qmeta = df_from_query(
+        conn,
+        """
+        SELECT questionario_id, setor, porte, regiao, versao, status, observacao
+        FROM questionario
+        WHERE questionario_id=?
+        """,
+        (questionario_id,),
+    )
+
+    peso_tema = df_from_query(conn, "SELECT tema_id, peso_tema FROM peso_tema WHERE questionario_id=?", (questionario_id,))
+    peso_topico = df_from_query(conn, "SELECT topico_id, peso_topico FROM peso_topico WHERE questionario_id=?", (questionario_id,))
+    ind_cfg = df_from_query(
+        conn,
+        """
+        SELECT indicador_id, ativo, peso_indicador
+        FROM indicador_config
+        WHERE questionario_id=?
+        """,
+        (questionario_id,),
+    )
+
+    cached = {
+        "qmeta": qmeta,
+        "peso_tema": peso_tema,
+        "peso_topico": peso_topico,
+        "ind_cfg": ind_cfg,
+    }
+    _cache_set(key, cached)
+    return cached
+
+
+# -------------------- UI --------------------
 def render_setup_builder(conn):
     st.header("Setup do Questionário (Builder)")
 
-    # ---------------- A) Selecionar / Criar questionário ----------------
+    macro = load_macro_cache(conn)
+
+    # ---------- A) Selecionar / Criar questionário ----------
     st.subheader("A) Selecionar ou criar questionário (perfil)")
 
     qdf = df_from_query(
         conn,
         """
-        SELECT questionario_id, setor, porte, regiao, versao, status, observacao
+        SELECT questionario_id, setor, porte, regiao, versao, status
         FROM questionario
         ORDER BY created_at DESC
         """,
     )
 
+    default_sel = st.session_state.get("_selected_qid", "(novo)")
     options = ["(novo)"] + (qdf["questionario_id"].tolist() if not qdf.empty else [])
-    selected = st.selectbox("Questionário", options)
+    if default_sel not in options:
+        default_sel = "(novo)"
+
+    selected = st.selectbox("Questionário", options, index=options.index(default_sel), key="_qid_select")
 
     if selected == "(novo)":
         with st.expander("Criar novo questionário", expanded=True):
@@ -51,11 +150,7 @@ def render_setup_builder(conn):
                     st.error("Informe QUESTIONARIO_ID.")
                     st.stop()
 
-                exists = df_from_query(
-                    conn,
-                    "SELECT 1 FROM questionario WHERE questionario_id=? LIMIT 1",
-                    (qid.strip(),),
-                )
+                exists = df_from_query(conn, "SELECT 1 FROM questionario WHERE questionario_id=? LIMIT 1", (qid.strip(),))
                 if not exists.empty:
                     st.warning("Esse QUESTIONARIO_ID já existe. Selecione-o no dropdown.")
                     st.stop()
@@ -68,21 +163,21 @@ def render_setup_builder(conn):
                     (qid.strip(), setor.strip(), porte.strip(), regiao.strip(), versao.strip(), status, obs.strip()),
                 )
                 conn.commit()
-                st.success("Questionário criado.")
-                st.rerun()
-
-        st.info("Crie um questionário para habilitar as etapas B–F.")
+                _cache_bump()
+                st.session_state["_selected_qid"] = qid.strip()
+                st.success("Questionário criado. Selecione-o no dropdown acima.")
         return
 
+    # Fix selection in session
+    st.session_state["_selected_qid"] = selected
     qid = selected
-    qmeta = df_from_query(
-        conn,
-        """
-        SELECT questionario_id, setor, porte, regiao, versao, status, observacao
-        FROM questionario WHERE questionario_id = ?
-        """,
-        (qid,),
-    )
+
+    qcache = load_questionario_cache(conn, qid)
+    qmeta = qcache["qmeta"]
+    if qmeta.empty:
+        st.error("Questionário não encontrado no banco.")
+        return
+
     st.caption(
         f"Perfil: setor={qmeta.loc[0,'setor']} | porte={qmeta.loc[0,'porte']} | "
         f"regiao={qmeta.loc[0,'regiao']} | versao={qmeta.loc[0,'versao']} | status={qmeta.loc[0,'status']}"
@@ -90,208 +185,200 @@ def render_setup_builder(conn):
 
     st.divider()
 
-    # ---------------- B) Wizard: Temas -> Tópicos -> Indicadores ----------------
-    st.subheader("B) Seleção (wizard) — Temas → Tópicos → Indicadores")
+    # ---------- B) Seleção ----------
+    st.subheader("B) Seleção — Temas → Tópicos → Indicadores (B2 por Tema)")
 
-    tab1, tab2, tab3 = st.tabs(["B1) Temas por Eixo", "B1.2) Tópicos por Tema", "B2) Indicadores por Tópico"])
+    tab1, tab2, tab3 = st.tabs(["B1) Temas (todos)", "B1.2) Tópicos", "B2) Indicadores (por Tema)"])
 
-    # ---------- B1) Temas por Eixo ----------
+    # --- B1: Temas (lista completa) ---
     with tab1:
-        eixos = df_from_query(conn, "SELECT eixo_id, nome FROM eixo ORDER BY eixo_id")
-        if eixos.empty:
-            st.warning("Não há eixos na macro-base. Carregue a macro-base primeiro.")
-        else:
-            eixo_sel = st.selectbox("Eixo", eixos["eixo_id"].tolist(), key=f"b1_eixo_{qid}")
+        temas = macro["temas"].copy()
+        # map do peso_tema existente
+        peso_tema = qcache["peso_tema"]
+        tema_map = dict(zip(peso_tema["tema_id"], peso_tema["peso_tema"])) if not peso_tema.empty else {}
 
-            temas = df_from_query(
-                conn,
-                """
-                SELECT tema_id, nome
-                FROM tema
-                WHERE eixo_id=?
-                ORDER BY tema_id
-                """,
-                (eixo_sel,),
-            )
+        temas["incluir"] = temas["tema_id"].map(lambda x: x in tema_map)
+        temas["peso (1..10)"] = temas["tema_id"].map(lambda x: int(tema_map.get(x, 1)))
 
-            t_p = df_from_query(conn, "SELECT tema_id, peso_tema FROM peso_tema WHERE questionario_id=?", (qid,))
-            t_map = dict(zip(t_p["tema_id"], t_p["peso_tema"])) if not t_p.empty else {}
+        # Mostra eixo junto
+        temas = temas[["eixo_id", "tema_id", "nome", "incluir", "peso (1..10)"]]
 
-            tedit = temas.copy()
-            tedit["incluir"] = tedit["tema_id"].map(lambda x: x in t_map)
-            tedit["peso (1..10)"] = tedit["tema_id"].map(lambda x: int(t_map.get(x, 1)))
+        temas_edit = st.data_editor(
+            temas,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "incluir": st.column_config.CheckboxColumn("Incluir"),
+                "peso (1..10)": st.column_config.NumberColumn("Peso", min_value=1, max_value=10, step=1),
+            },
+            key=f"b1_temas_{qid}",
+        )
 
-            tedit2 = st.data_editor(
-                tedit,
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "incluir": st.column_config.CheckboxColumn("Incluir"),
-                    "peso (1..10)": st.column_config.NumberColumn("Peso", min_value=1, max_value=10, step=1),
-                },
-                key=f"b1_temas_editor_{qid}_{eixo_sel}",
-            )
+        if st.button("Salvar Temas selecionados"):
+            # remove todos e reinsere marcados (mais simples)
+            conn.execute("DELETE FROM peso_tema WHERE questionario_id=?", (qid,))
+            for _, r in temas_edit.iterrows():
+                if bool(r["incluir"]):
+                    conn.execute(
+                        """
+                        INSERT INTO peso_tema (questionario_id, tema_id, peso_tema)
+                        VALUES (?, ?, ?)
+                        """,
+                        (qid, r["tema_id"], w_1a10(r["peso (1..10)"])),
+                    )
+            conn.commit()
+            _cache_bump()
+            st.success("Temas salvos. Vá para B1.2 (Tópicos).")
 
-            if st.button("Salvar temas do eixo"):
-                # remove temas desse eixo do questionário e reinsere os marcados
-                conn.execute(
-                    """
-                    DELETE FROM peso_tema
-                    WHERE questionario_id=?
-                      AND tema_id IN (SELECT tema_id FROM tema WHERE eixo_id=?)
-                    """,
-                    (qid, eixo_sel),
-                )
-
-                for _, r in tedit2.iterrows():
-                    if bool(r["incluir"]):
-                        conn.execute(
-                            """
-                            INSERT INTO peso_tema (questionario_id, tema_id, peso_tema)
-                            VALUES (?, ?, ?)
-                            ON CONFLICT(questionario_id, tema_id)
-                            DO UPDATE SET peso_tema=excluded.peso_tema
-                            """,
-                            (qid, r["tema_id"], w_1a10(r["peso (1..10)"])),
-                        )
-                conn.commit()
-                st.success("Temas salvos. Vá para B1.2.")
-                st.rerun()
-
-    # ---------- B1.2) Tópicos por Tema ----------
+    # --- B1.2: Tópicos (dos temas selecionados) ---
     with tab2:
+        # temas selecionados
         sel_temas = df_from_query(
             conn,
             """
-            SELECT t.tema_id, t.nome, t.eixo_id, pt.peso_tema
-            FROM peso_tema pt
-            JOIN tema t ON t.tema_id=pt.tema_id
-            WHERE pt.questionario_id=?
-            ORDER BY t.eixo_id, t.tema_id
+            SELECT tema_id
+            FROM peso_tema
+            WHERE questionario_id=?
+            ORDER BY tema_id
             """,
             (qid,),
         )
-
         if sel_temas.empty:
             st.info("Nenhum tema selecionado ainda. Vá na aba B1 e selecione temas.")
         else:
-            tema_sel = st.selectbox("Tema selecionado", sel_temas["tema_id"].tolist(), key=f"b12_tema_{qid}")
+            tema_ids = sel_temas["tema_id"].tolist()
+            topicos = macro["topicos"][macro["topicos"]["tema_id"].isin(tema_ids)].copy()
 
-            topicos = df_from_query(
-                conn,
-                """
-                SELECT topico_id, nome
-                FROM topico
-                WHERE tema_id=?
-                ORDER BY topico_id
-                """,
-                (tema_sel,),
-            )
+            peso_topico = qcache["peso_topico"]
+            topico_map = dict(zip(peso_topico["topico_id"], peso_topico["peso_topico"])) if not peso_topico.empty else {}
 
-            p_p = df_from_query(conn, "SELECT topico_id, peso_topico FROM peso_topico WHERE questionario_id=?", (qid,))
-            p_map = dict(zip(p_p["topico_id"], p_p["peso_topico"])) if not p_p.empty else {}
+            topicos["incluir"] = topicos["topico_id"].map(lambda x: x in topico_map)
+            topicos["peso (1..10)"] = topicos["topico_id"].map(lambda x: int(topico_map.get(x, 1)))
 
-            pedit = topicos.copy()
-            pedit["incluir"] = pedit["topico_id"].map(lambda x: x in p_map)
-            pedit["peso (1..10)"] = pedit["topico_id"].map(lambda x: int(p_map.get(x, 1)))
+            topicos = topicos[["tema_id", "topico_id", "nome", "incluir", "peso (1..10)"]]
 
-            pedit2 = st.data_editor(
-                pedit,
+            topicos_edit = st.data_editor(
+                topicos,
                 hide_index=True,
                 use_container_width=True,
                 column_config={
                     "incluir": st.column_config.CheckboxColumn("Incluir"),
                     "peso (1..10)": st.column_config.NumberColumn("Peso", min_value=1, max_value=10, step=1),
                 },
-                key=f"b12_topicos_editor_{qid}_{tema_sel}",
+                key=f"b12_topicos_{qid}",
             )
 
-            if st.button("Salvar tópicos do tema"):
-                conn.execute(
-                    """
-                    DELETE FROM peso_topico
-                    WHERE questionario_id=?
-                      AND topico_id IN (SELECT topico_id FROM topico WHERE tema_id=?)
-                    """,
-                    (qid, tema_sel),
-                )
-
-                for _, r in pedit2.iterrows():
+            if st.button("Salvar Tópicos selecionados"):
+                conn.execute("DELETE FROM peso_topico WHERE questionario_id=?", (qid,))
+                for _, r in topicos_edit.iterrows():
                     if bool(r["incluir"]):
                         conn.execute(
                             """
                             INSERT INTO peso_topico (questionario_id, topico_id, peso_topico)
                             VALUES (?, ?, ?)
-                            ON CONFLICT(questionario_id, topico_id)
-                            DO UPDATE SET peso_topico=excluded.peso_topico
                             """,
                             (qid, r["topico_id"], w_1a10(r["peso (1..10)"])),
                         )
                 conn.commit()
-                st.success("Tópicos salvos. Vá para B2.")
-                st.rerun()
+                _cache_bump()
+                st.success("Tópicos salvos. Vá para B2 (Indicadores).")
 
-    # ---------- B2) Indicadores por Tópico ----------
+    # --- B2: Indicadores por Tema (sem filtro por eixo; lista por tema selecionado) ---
     with tab3:
-        sel_topicos = df_from_query(
+        sel_temas = df_from_query(
             conn,
             """
-            SELECT tp.topico_id, tp.nome, tp.tema_id, pt.peso_topico
-            FROM peso_topico pt
-            JOIN topico tp ON tp.topico_id=pt.topico_id
+            SELECT t.tema_id, t.nome, t.eixo_id
+            FROM peso_tema pt
+            JOIN tema t ON t.tema_id = pt.tema_id
             WHERE pt.questionario_id=?
-            ORDER BY tp.tema_id, tp.topico_id
+            ORDER BY t.eixo_id, t.tema_id
             """,
             (qid,),
         )
-
-        if sel_topicos.empty:
-            st.info("Nenhum tópico selecionado ainda. Vá na aba B1.2 e selecione tópicos.")
+        if sel_temas.empty:
+            st.info("Nenhum tema selecionado ainda. Vá na aba B1 e selecione temas.")
         else:
-            topico_sel = st.selectbox("Tópico selecionado", sel_topicos["topico_id"].tolist(), key=f"b2_topico_{qid}")
-
-            ind = df_from_query(
-                conn,
-                """
-                SELECT
-                  i.indicador_id,
-                  i.nome,
-                  i.tipo_indicador,
-                  i.psr_tipo,
-                  COALESCE(ic.ativo, 0) AS ativo,
-                  COALESCE(ic.peso_indicador, 1) AS peso_indicador
-                FROM indicador i
-                LEFT JOIN indicador_config ic
-                  ON ic.indicador_id=i.indicador_id AND ic.questionario_id=?
-                WHERE i.topico_id=?
-                ORDER BY i.indicador_id
-                """,
-                (qid, topico_sel),
+            tema_choice = st.selectbox(
+                "Tema selecionado",
+                sel_temas["tema_id"].tolist(),
+                key=f"b2_tema_sel_{qid}",
             )
 
-            if ind.empty:
-                st.info("Não há indicadores nesse tópico.")
+            # tópicos selecionados do tema
+            sel_topicos = df_from_query(
+                conn,
+                """
+                SELECT tp.topico_id, tp.nome
+                FROM peso_topico pt
+                JOIN topico tp ON tp.topico_id=pt.topico_id
+                WHERE pt.questionario_id=? AND tp.tema_id=?
+                ORDER BY tp.topico_id
+                """,
+                (qid, tema_choice),
+            )
+            if sel_topicos.empty:
+                st.info("Nenhum tópico selecionado para este tema. Vá na aba B1.2 e selecione tópicos.")
             else:
-                edit = ind.copy()
-                edit["peso (1..10)"] = edit["peso_indicador"]
-                edit = edit[["ativo", "peso (1..10)", "indicador_id", "nome", "tipo_indicador", "psr_tipo"]]
+                topico_ids = sel_topicos["topico_id"].tolist()
 
-                edit2 = st.data_editor(
-                    edit,
+                # indicadores do tema (via tópicos selecionados)
+                ind_base = df_from_query(
+                    conn,
+                    """
+                    SELECT
+                      i.indicador_id,
+                      i.nome,
+                      i.tipo_indicador,
+                      i.psr_tipo,
+                      i.topico_id
+                    FROM indicador i
+                    WHERE i.topico_id IN ({})
+                    ORDER BY i.indicador_id
+                    """.format(",".join(["?"] * len(topico_ids))),
+                    tuple(topico_ids),
+                )
+
+                # join com indicador_config
+                ind_cfg = df_from_query(
+                    conn,
+                    """
+                    SELECT indicador_id, ativo, peso_indicador
+                    FROM indicador_config
+                    WHERE questionario_id=?
+                    """,
+                    (qid,),
+                )
+                cfg_map = {}
+                if not ind_cfg.empty:
+                    for _, r in ind_cfg.iterrows():
+                        cfg_map[r["indicador_id"]] = (int(r["ativo"]), int(r["peso_indicador"]))
+
+                ind_base["ativo"] = ind_base["indicador_id"].map(lambda x: cfg_map.get(x, (0, 1))[0])
+                ind_base["peso (1..10)"] = ind_base["indicador_id"].map(lambda x: cfg_map.get(x, (0, 1))[1])
+
+                # adiciona nome do tópico para facilitar navegação
+                tp_name_map = dict(zip(sel_topicos["topico_id"], sel_topicos["nome"]))
+                ind_base["topico_nome"] = ind_base["topico_id"].map(lambda x: tp_name_map.get(x, ""))
+
+                ind_edit = ind_base[["ativo", "peso (1..10)", "indicador_id", "nome", "topico_id", "topico_nome", "tipo_indicador", "psr_tipo"]].copy()
+
+                ind_edit2 = st.data_editor(
+                    ind_edit,
                     hide_index=True,
                     use_container_width=True,
                     column_config={
                         "ativo": st.column_config.CheckboxColumn("Ativo"),
                         "peso (1..10)": st.column_config.NumberColumn("Peso", min_value=1, max_value=10, step=1),
                     },
-                    key=f"b2_inds_editor_{qid}_{topico_sel}",
+                    key=f"b2_inds_{qid}_{tema_choice}",
                 )
 
-                # Botões em massa (peso default 1)
-                colA, colB, _ = st.columns([1, 1, 2])
+                colA, colB, colC = st.columns([1, 1, 2])
+
                 with colA:
-                    if st.button("Ativar todos do tópico"):
-                        for _, r in edit2.iterrows():
+                    if st.button("Ativar todos do tema"):
+                        for _, r in ind_edit2.iterrows():
                             conn.execute(
                                 """
                                 INSERT INTO indicador_config (questionario_id, indicador_id, ativo, peso_indicador)
@@ -302,12 +389,12 @@ def render_setup_builder(conn):
                                 (qid, r["indicador_id"]),
                             )
                         conn.commit()
-                        st.success("Todos os indicadores do tópico foram ativados (peso=1).")
-                        st.rerun()
+                        _cache_bump()
+                        st.success("Todos os indicadores do tema foram ativados (peso=1).")
 
                 with colB:
-                    if st.button("Desativar todos do tópico"):
-                        for _, r in edit2.iterrows():
+                    if st.button("Desativar todos do tema"):
+                        for _, r in ind_edit2.iterrows():
                             conn.execute(
                                 """
                                 INSERT INTO indicador_config (questionario_id, indicador_id, ativo, peso_indicador)
@@ -318,46 +405,48 @@ def render_setup_builder(conn):
                                 (qid, r["indicador_id"]),
                             )
                         conn.commit()
-                        st.success("Todos os indicadores do tópico foram desativados.")
-                        st.rerun()
+                        _cache_bump()
+                        st.success("Todos os indicadores do tema foram desativados.")
 
-                if st.button("Salvar indicadores do tópico"):
-                    for _, r in edit2.iterrows():
-                        ativo = 1 if bool(r["ativo"]) else 0
-                        conn.execute(
-                            """
-                            INSERT INTO indicador_config (questionario_id, indicador_id, ativo, peso_indicador)
-                            VALUES (?, ?, ?, ?)
-                            ON CONFLICT(questionario_id, indicador_id)
-                            DO UPDATE SET ativo=excluded.ativo, peso_indicador=excluded.peso_indicador
-                            """,
-                            (qid, r["indicador_id"], ativo, w_1a10(r["peso (1..10)"])),
-                        )
-                    conn.commit()
-                    st.success("Indicadores salvos.")
-                    st.rerun()
+                with colC:
+                    if st.button("Salvar Indicadores do tema"):
+                        for _, r in ind_edit2.iterrows():
+                            ativo = 1 if bool(r["ativo"]) else 0
+                            conn.execute(
+                                """
+                                INSERT INTO indicador_config (questionario_id, indicador_id, ativo, peso_indicador)
+                                VALUES (?, ?, ?, ?)
+                                ON CONFLICT(questionario_id, indicador_id)
+                                DO UPDATE SET ativo=excluded.ativo, peso_indicador=excluded.peso_indicador
+                                """,
+                                (qid, r["indicador_id"], ativo, w_1a10(r["peso (1..10)"])),
+                            )
+                        conn.commit()
+                        _cache_bump()
+                        st.success("Indicadores salvos.")
 
     st.divider()
 
-    # indicadores ativos (para D/E/F)
-    active_inds = df_from_query(
+    # ---------- D/E/F mantidas (mais leve: só roda quando há indicadores ativos) ----------
+    active_axes = df_from_query(
         conn,
         """
-        SELECT i.indicador_id, i.nome, i.tipo_indicador
-        FROM indicador i
-        JOIN indicador_config ic ON ic.indicador_id=i.indicador_id
-        WHERE ic.questionario_id=? AND ic.ativo=1
-        ORDER BY i.indicador_id
+        SELECT t.eixo_id, COUNT(*) AS qtd
+        FROM indicador_config ic
+        JOIN indicador i ON i.indicador_id = ic.indicador_id
+        JOIN topico tp ON tp.topico_id = i.topico_id
+        JOIN tema t ON t.tema_id = tp.tema_id
+        WHERE ic.questionario_id = ? AND ic.ativo = 1
+        GROUP BY t.eixo_id
+        ORDER BY t.eixo_id
         """,
         (qid,),
     )
-    if active_inds.empty:
-        st.warning("Nenhum indicador ativo ainda. Use B2 para ativar indicadores.")
+    if active_axes.empty:
+        st.warning("Nenhum indicador ativo ainda. Ative indicadores na etapa B2.")
         return
 
-    # ---------------- D) Faixas (calculados) ----------------
-    st.subheader("D) Faixas de referência (nível 1..5) — Indicadores CALCULADO")
-
+    st.subheader("D) Faixas (indicadores CALCULADO)")
     calc_inds = df_from_query(
         conn,
         """
@@ -369,7 +458,6 @@ def render_setup_builder(conn):
         """,
         (qid,),
     )
-
     if calc_inds.empty:
         st.info("Nenhum indicador CALCULADO ativo.")
     else:
@@ -388,14 +476,12 @@ def render_setup_builder(conn):
 
         if faixa.empty:
             faixa = pd.DataFrame(
-                {
-                    "nivel": [1, 2, 3, 4, 5],
-                    "tipo_regra": ["INTERVALO"] * 5,
-                    "valor_min": [None] * 5,
-                    "valor_max": [None] * 5,
-                    "valor_exato": [None] * 5,
-                    "rotulo": [""] * 5,
-                }
+                {"nivel": [1, 2, 3, 4, 5],
+                 "tipo_regra": ["INTERVALO"] * 5,
+                 "valor_min": [None] * 5,
+                 "valor_max": [None] * 5,
+                 "valor_exato": [None] * 5,
+                 "rotulo": [""] * 5}
             )
 
         faixa_edit = st.data_editor(
@@ -430,14 +516,12 @@ def render_setup_builder(conn):
                     ),
                 )
             conn.commit()
+            _cache_bump()
             st.success("Faixas salvas.")
-            st.rerun()
 
     st.divider()
 
-    # ---------------- E) Recomendações (Tema/Eixo) com fallback default ----------------
     st.subheader("E) Recomendações por nível (Tema / Eixo)")
-
     used_themes = df_from_query(
         conn,
         """
@@ -467,7 +551,6 @@ def render_setup_builder(conn):
             """,
             (qid, tema_sel),
         )
-
         if rec_t.empty:
             rec_def = df_from_query(
                 conn,
@@ -479,7 +562,7 @@ def render_setup_builder(conn):
                 """,
                 (tema_sel,),
             )
-            rec_t = rec_def if not rec_def.empty else pd.DataFrame({"nivel": [1, 2, 3, 4, 5], "recomendacao": [""] * 5})
+            rec_t = rec_def if not rec_def.empty else pd.DataFrame({"nivel": [1,2,3,4,5], "recomendacao": [""]*5})
 
         rec_t_edit = st.data_editor(
             rec_t,
@@ -488,7 +571,6 @@ def render_setup_builder(conn):
             column_config={"nivel": st.column_config.NumberColumn("Nível", disabled=True)},
             key=f"rec_tema_editor_{qid}_{tema_sel}",
         )
-
         if st.button("Salvar recomendações do Tema"):
             conn.execute("DELETE FROM recomendacao_tema WHERE questionario_id=? AND tema_id=?", (qid, tema_sel))
             for _, r in rec_t_edit.iterrows():
@@ -501,8 +583,8 @@ def render_setup_builder(conn):
                         (qid, tema_sel, int(r["nivel"]), str(r["recomendacao"]).strip()),
                     )
             conn.commit()
+            _cache_bump()
             st.success("Recomendações do tema salvas.")
-            st.rerun()
 
         used_eixos = df_from_query(
             conn,
@@ -529,7 +611,6 @@ def render_setup_builder(conn):
             """,
             (qid, eixo_sel),
         )
-
         if rec_e.empty:
             rec_def = df_from_query(
                 conn,
@@ -541,7 +622,7 @@ def render_setup_builder(conn):
                 """,
                 (eixo_sel,),
             )
-            rec_e = rec_def if not rec_def.empty else pd.DataFrame({"nivel": [1, 2, 3, 4, 5], "recomendacao": [""] * 5})
+            rec_e = rec_def if not rec_def.empty else pd.DataFrame({"nivel": [1,2,3,4,5], "recomendacao": [""]*5})
 
         rec_e_edit = st.data_editor(
             rec_e,
@@ -550,7 +631,6 @@ def render_setup_builder(conn):
             column_config={"nivel": st.column_config.NumberColumn("Nível", disabled=True)},
             key=f"rec_eixo_editor_{qid}_{eixo_sel}",
         )
-
         if st.button("Salvar recomendações do Eixo"):
             conn.execute("DELETE FROM recomendacao_eixo WHERE questionario_id=? AND eixo_id=?", (qid, eixo_sel))
             for _, r in rec_e_edit.iterrows():
@@ -563,12 +643,11 @@ def render_setup_builder(conn):
                         (qid, eixo_sel, int(r["nivel"]), str(r["recomendacao"]).strip()),
                     )
             conn.commit()
+            _cache_bump()
             st.success("Recomendações do eixo salvas.")
-            st.rerun()
 
     st.divider()
 
-    # ---------------- F) Export ----------------
     st.subheader("F) Exportar SETUP_QUESTIONARIO.xlsx")
     if st.button("Gerar arquivo SETUP_QUESTIONARIO.xlsx"):
         xlsx_bytes = export_setup_xlsx(conn, qid)
