@@ -1,7 +1,41 @@
 import os
 import time
 import streamlit as st
-import libsql
+
+try:
+    import libsql  # type: ignore
+except Exception:
+    libsql = None
+
+try:
+    from libsql_client import create_client_sync  # type: ignore
+except Exception:
+    create_client_sync = None
+
+
+class ResultSetCursorAdapter:
+    def __init__(self, result_set):
+        self._result_set = result_set
+        self.description = [(c,) for c in tuple(getattr(result_set, "columns", ()))]
+
+    def fetchall(self):
+        return list(getattr(self._result_set, "rows", []))
+
+
+class LibsqlClientConnAdapter:
+    def __init__(self, client):
+        self._client = client
+
+    def execute(self, sql: str, params=()):
+        args = tuple(params) if params is not None else ()
+        result_set = self._client.execute(sql, args)
+        return ResultSetCursorAdapter(result_set)
+
+    def commit(self):
+        return None
+
+    def sync(self):
+        return None
 
 def _get_secret(name: str) -> str:
     if name in st.secrets:
@@ -11,10 +45,25 @@ def _get_secret(name: str) -> str:
 def _connect():
     url = _get_secret("TURSO_DATABASE_URL")
     token = _get_secret("TURSO_AUTH_TOKEN")
+
     if not url or not token:
-        raise RuntimeError("Defina TURSO_DATABASE_URL e TURSO_AUTH_TOKEN nos Secrets do Streamlit.")
-    conn = libsql.connect("sorg_macrobase.db", sync_url=url, auth_token=token)
-    return conn
+        raise RuntimeError(
+            "Turso obrigatório: defina TURSO_DATABASE_URL e TURSO_AUTH_TOKEN em st.secrets ou variáveis de ambiente."
+        )
+
+    if libsql is not None:
+        return libsql.connect("sorg_macrobase.db", sync_url=url, auth_token=token)
+
+    if create_client_sync is not None:
+        client_url = url
+        if url.startswith("libsql://"):
+            client_url = "https://" + url[len("libsql://"):]
+        client = create_client_sync(client_url, auth_token=token)
+        return LibsqlClientConnAdapter(client)
+
+    raise RuntimeError(
+        "Turso obrigatório: nenhum cliente Turso disponível. Instale libsql-client (ou libsql) no ambiente."
+    )
 
 @st.cache_resource
 def get_conn():

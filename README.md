@@ -1,5 +1,31 @@
 URL da aplicação https://plataforma-esg-admi1.streamlit.app/
 
+## Execução local (Windows/Linux/macOS)
+
+1. Instale as dependências:
+	- `pip install -r requirements.txt`
+2. Rode a aplicação:
+	- `streamlit run app.py`
+
+### Banco de dados
+
+- **Turso obrigatório:** defina `TURSO_DATABASE_URL` e `TURSO_AUTH_TOKEN` (em variáveis de ambiente ou `st.secrets`).
+- Sem essas credenciais, a aplicação não inicia.
+
+### Deploy no Streamlit Cloud (com Turso)
+
+1. No app do Streamlit Cloud, vá em **Settings → Secrets**.
+2. Adicione:
+
+```toml
+TURSO_DATABASE_URL = "libsql://SEU-BANCO.turso.io"
+TURSO_AUTH_TOKEN = "SEU_TOKEN"
+```
+
+3. Faça o deploy/redeploy.
+
+Com esses secrets, a aplicação conecta no Turso. Sem secrets válidos, a aplicação falha na inicialização (com mensagem explícita).
+
 
 Sobre o Layout planilha parametrização ESG que você me ajudou a elaborar, eu fiz algumas alterações e pensei em implementar uma aplicação simples em python, usando o github e streamlit para fazer a gestão de uma planilha completa com todos os indicadores, seguindo a taxonomia
 Eixo: Ambiental (E), Social (S) e Governança (G)

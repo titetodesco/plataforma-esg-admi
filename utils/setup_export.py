@@ -81,17 +81,52 @@ def export_setup_xlsx(conn, questionario_id: str) -> bytes:
     write_df(wb.create_sheet("INDICADORES_SETUP"), ind)
 
     # FAIXA_REFERENCIA
-    fr = df_from_query(conn, """
+    fr_raw = df_from_query(conn, """
         SELECT questionario_id, indicador_id, nivel, tipo_regra, valor_min, valor_max, valor_exato, rotulo
         FROM faixa_referencia
         WHERE questionario_id=?
         ORDER BY indicador_id, nivel
     """, (questionario_id,))
-    if fr.empty:
-        fr = pd.DataFrame(columns=["questionario_id","indicador_id","nivel","tipo_regra","valor_min","valor_max","valor_exato","rotulo"])
+
+    calc_active = df_from_query(conn, """
+        SELECT ic.indicador_id
+        FROM indicador_config ic
+        JOIN indicador i ON i.indicador_id = ic.indicador_id
+        WHERE ic.questionario_id=?
+          AND ic.ativo=1
+          AND i.tipo_indicador='CALCULADO'
+        ORDER BY ic.indicador_id
+    """, (questionario_id,))
+
+    if calc_active.empty:
+        fr = fr_raw if not fr_raw.empty else pd.DataFrame(columns=["questionario_id","indicador_id","nivel","tipo_regra","valor_min","valor_max","valor_exato","rotulo"])
+    else:
+        indicadores_calc = calc_active["indicador_id"].tolist()
+        expected_idx = pd.MultiIndex.from_product(
+            [indicadores_calc, [1, 2, 3, 4, 5]],
+            names=["indicador_id", "nivel"],
+        )
+
+        if fr_raw.empty:
+            fr = expected_idx.to_frame(index=False)
+            fr["questionario_id"] = questionario_id
+            fr["tipo_regra"] = "INTERVALO"
+            fr["valor_min"] = None
+            fr["valor_max"] = None
+            fr["valor_exato"] = None
+            fr["rotulo"] = ""
+            fr = fr[["questionario_id","indicador_id","nivel","tipo_regra","valor_min","valor_max","valor_exato","rotulo"]]
+        else:
+            fr_calc = fr_raw[fr_raw["indicador_id"].isin(indicadores_calc)].copy()
+            fr_calc = fr_calc.set_index(["indicador_id", "nivel"]).reindex(expected_idx).reset_index()
+            fr_calc["questionario_id"] = fr_calc["questionario_id"].fillna(questionario_id)
+            fr_calc["tipo_regra"] = fr_calc["tipo_regra"].fillna("INTERVALO")
+            fr_calc["rotulo"] = fr_calc["rotulo"].fillna("")
+            fr = fr_calc[["questionario_id","indicador_id","nivel","tipo_regra","valor_min","valor_max","valor_exato","rotulo"]]
+
     write_df(wb.create_sheet("FAIXA_REFERENCIA"), fr)
 
-    # RECOM_TEMA
+    # RECOM_TEMA (somente tabela editável)
     rt = df_from_query(conn, """
         SELECT questionario_id, tema_id, nivel, recomendacao
         FROM recomendacao_tema
@@ -100,9 +135,10 @@ def export_setup_xlsx(conn, questionario_id: str) -> bytes:
     """, (questionario_id,))
     if rt.empty:
         rt = pd.DataFrame(columns=["questionario_id","tema_id","nivel","recomendacao"])
+
     write_df(wb.create_sheet("RECOM_TEMA"), rt)
 
-    # RECOM_EIXO
+    # RECOM_EIXO (somente tabela editável)
     re = df_from_query(conn, """
         SELECT questionario_id, eixo_id, nivel, recomendacao
         FROM recomendacao_eixo
@@ -111,6 +147,7 @@ def export_setup_xlsx(conn, questionario_id: str) -> bytes:
     """, (questionario_id,))
     if re.empty:
         re = pd.DataFrame(columns=["questionario_id","eixo_id","nivel","recomendacao"])
+
     write_df(wb.create_sheet("RECOM_EIXO"), re)
 
     bio = io.BytesIO()
