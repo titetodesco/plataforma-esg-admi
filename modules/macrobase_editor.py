@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from utils.excel_io import load_macrobase
+from utils.excel_io import load_macrobase, export_macrobase_xlsx
 
 
 def _bump_cache_ver():
@@ -786,6 +786,22 @@ def _render_crud_macrobase(conn):
 
 def render_macrobase_editor(conn):
     st.header("Macro-base (Turso) — v2.1")
+
+    with st.expander("Exportar macro-base atual (Turso -> Excel)", expanded=False):
+        st.caption("Baixa um arquivo completo da macro-base atual sem alterar nenhum dado no Turso.")
+        if st.button("Gerar arquivo da macro-base atual", key="btn_export_macrobase"):
+            try:
+                payload = export_macrobase_xlsx(conn)
+                st.download_button(
+                    "Baixar macro-base atualizada (.xlsx)",
+                    data=payload,
+                    file_name="macro-base-2.1-atualizada.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_macrobase_xlsx",
+                )
+                st.success("Arquivo gerado. Clique em 'Baixar macro-base atualizada (.xlsx)'.")
+            except Exception as e:
+                st.error(f"Erro ao gerar arquivo da macro-base: {_friendly_db_error(e)}")
 
     if "macrobase_upload_unlocked" not in st.session_state:
         st.session_state["macrobase_upload_unlocked"] = False
