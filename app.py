@@ -6,8 +6,17 @@ from modules.setup_builder import render_setup_builder
 st.set_page_config(layout="wide")
 st.title("SORG ESG - Builder (Turso)")
 
-conn = get_conn()
-init_schema(conn)
+try:
+    conn = get_conn()
+    init_schema(conn)
+except Exception as e:
+    st.error("Falha ao conectar no Turso.")
+    st.info(
+        "No Streamlit Cloud, configure em **Manage app → Settings → Secrets**: "
+        "`TURSO_DATABASE_URL` e `TURSO_AUTH_TOKEN`."
+    )
+    st.caption(f"Detalhe técnico: {e}")
+    st.stop()
 
 menu = st.sidebar.selectbox("Menu", ["Macro-base", "Setup do Questionário"])
 
