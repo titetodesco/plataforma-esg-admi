@@ -828,7 +828,7 @@ def render_macrobase_editor(conn):
             st.subheader("Pré-visualização do Excel")
             for k in data.keys():
                 st.write(f"**{k}**")
-                st.dataframe(data[k], width="stretch")
+                st.dataframe(data[k], use_container_width=True)
 
             if st.button("Publicar macro-base no Turso (schema v2.1)"):
                 with st.spinner("Gravando no Turso..."):
@@ -838,11 +838,21 @@ def render_macrobase_editor(conn):
 
         st.divider()
         st.subheader("Visualização das tabelas no Turso")
-        for table in ["eixo","tema","topico","indicador","variavel","variavel_opcao","indicador_variavel"]:
+        for table in [
+            "eixo",
+            "tema",
+            "topico",
+            "indicador",
+            "variavel",
+            "variavel_opcao",
+            "indicador_variavel",
+            "recomendacao_tema_default",
+            "recomendacao_eixo_default",
+        ]:
             with st.expander(table, expanded=False):
                 try:
                     df = load_table_df(conn, table)
-                    st.dataframe(df, width="stretch")
+                    st.dataframe(df, use_container_width=True)
                 except Exception as e:
                     st.info(f"Não consegui ler {table}: {e}")
     else:
@@ -855,6 +865,19 @@ def publish_macrobase_relacional_v21(conn, data: dict):
     # helpers
     def sid(x): return str(x).strip() if x is not None else ""
     def stext(x): return "" if pd.isna(x) else str(x).strip()
+
+    def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        out.columns = [str(c).strip().upper() for c in out.columns]
+        return out
+
+    def _pick_value(row, *candidates):
+        for col in candidates:
+            if col in row and not pd.isna(row[col]):
+                val = str(row[col]).strip()
+                if val != "":
+                    return val
+        return ""
 
     # PESO_DEFAULT: inteiro 1..10; vazio vira 1
     def sint_1a10(x):
@@ -870,6 +893,8 @@ def publish_macrobase_relacional_v21(conn, data: dict):
     conn.execute("DELETE FROM indicador_variavel;")
     conn.execute("DELETE FROM variavel_opcao;")
     conn.execute("DELETE FROM variavel;")
+    conn.execute("DELETE FROM recomendacao_tema_default;")
+    conn.execute("DELETE FROM recomendacao_eixo_default;")
     conn.execute("DELETE FROM indicador;")
     conn.execute("DELETE FROM topico;")
     conn.execute("DELETE FROM tema;")
@@ -965,6 +990,42 @@ def publish_macrobase_relacional_v21(conn, data: dict):
                 peso,
             )
         )
+
+    # RECOMENDACAO_TEMA_DEFAULT (opcional no arquivo)
+    if "RECOMENDACAO_TEMA_DEFAULT" in data:
+        df = _normalize_columns(data["RECOMENDACAO_TEMA_DEFAULT"].fillna(""))
+        for _, r in df.iterrows():
+            tema_id = _pick_value(r, "TEMA_ID")
+            if not tema_id:
+                continue
+            nivel_raw = _pick_value(r, "NIVEL")
+            if not nivel_raw:
+                continue
+            recomendacao = _pick_value(r, "RECOMENDACAO", "TEXTO")
+            if not recomendacao:
+                continue
+            conn.execute(
+                "INSERT INTO recomendacao_tema_default (tema_id, nivel, recomendacao) VALUES (?, ?, ?)",
+                (tema_id, int(float(str(nivel_raw).replace(",", "."))), recomendacao),
+            )
+
+    # RECOMENDACAO_EIXO_DEFAULT (opcional no arquivo)
+    if "RECOMENDACAO_EIXO_DEFAULT" in data:
+        df = _normalize_columns(data["RECOMENDACAO_EIXO_DEFAULT"].fillna(""))
+        for _, r in df.iterrows():
+            eixo_id = _pick_value(r, "EIXO_ID")
+            if not eixo_id:
+                continue
+            nivel_raw = _pick_value(r, "NIVEL")
+            if not nivel_raw:
+                continue
+            recomendacao = _pick_value(r, "RECOMENDACAO", "TEXTO")
+            if not recomendacao:
+                continue
+            conn.execute(
+                "INSERT INTO recomendacao_eixo_default (eixo_id, nivel, recomendacao) VALUES (?, ?, ?)",
+                (eixo_id, int(float(str(nivel_raw).replace(",", "."))), recomendacao),
+            )
 
     conn.commit()
     conn.sync()
