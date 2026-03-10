@@ -54,9 +54,56 @@ class LibsqlClientConnAdapter:
         return None
 
 def _get_secret(name: str) -> str:
-    if name in st.secrets:
-        return str(st.secrets[name])
-    return os.getenv(name, "")
+    alias_map = {
+        "TURSO_DATABASE_URL": ["TURSO_DATABASE_URL", "DATABASE_URL", "TURSO_URL"],
+        "TURSO_AUTH_TOKEN": ["TURSO_AUTH_TOKEN", "AUTH_TOKEN", "TURSO_TOKEN"],
+    }
+
+    nested_map = {
+        "TURSO_DATABASE_URL": [
+            ("turso", "database_url"),
+            ("turso", "url"),
+            ("database", "url"),
+        ],
+        "TURSO_AUTH_TOKEN": [
+            ("turso", "auth_token"),
+            ("turso", "token"),
+            ("database", "auth_token"),
+        ],
+    }
+
+    keys = alias_map.get(name, [name])
+
+    secrets_data = None
+    try:
+        secrets_data = st.secrets
+    except Exception:
+        secrets_data = None
+
+    if secrets_data is not None:
+        for key in keys:
+            if key in secrets_data and str(secrets_data[key]).strip():
+                return str(secrets_data[key]).strip()
+
+        for path in nested_map.get(name, []):
+            current = secrets_data
+            try:
+                for part in path:
+                    if part not in current:
+                        current = None
+                        break
+                    current = current[part]
+                if current is not None and str(current).strip():
+                    return str(current).strip()
+            except Exception:
+                continue
+
+    for key in keys:
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+
+    return ""
 
 def _connect():
     url = _get_secret("TURSO_DATABASE_URL")

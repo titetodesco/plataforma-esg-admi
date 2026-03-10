@@ -22,6 +22,14 @@ TURSO_DATABASE_URL = "libsql://SEU-BANCO.turso.io"
 TURSO_AUTH_TOKEN = "SEU_TOKEN"
 ```
 
+Também é aceito o formato em seção:
+
+```toml
+[turso]
+database_url = "libsql://SEU-BANCO.turso.io"
+auth_token = "SEU_TOKEN"
+```
+
 3. Faça o deploy/redeploy.
 
 Com esses secrets, a aplicação conecta no Turso. Sem secrets válidos, a aplicação falha na inicialização (com mensagem explícita).

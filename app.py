@@ -12,8 +12,16 @@ try:
 except Exception as e:
     st.error("Falha ao conectar no Turso.")
     st.info(
-        "No Streamlit Cloud, configure em **Manage app → Settings → Secrets**: "
-        "`TURSO_DATABASE_URL` e `TURSO_AUTH_TOKEN`."
+        "No Streamlit Cloud, configure em **Manage app → Settings → Secrets** "
+        "os campos de URL e token do Turso."
+    )
+    st.code(
+        'TURSO_DATABASE_URL = "libsql://SEU-BANCO.turso.io"\n'
+        'TURSO_AUTH_TOKEN = "SEU_TOKEN"\n\n'
+        '[turso]\n'
+        'database_url = "libsql://SEU-BANCO.turso.io"\n'
+        'auth_token = "SEU_TOKEN"',
+        language="toml",
     )
     st.caption(f"Detalhe técnico: {e}")
     st.stop()
